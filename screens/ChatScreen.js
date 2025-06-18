@@ -23,7 +23,7 @@ import { useAuth } from '../App';
 const ChatScreen = () => {
   const route = useRoute();
   const navigation = useNavigation();
-  const { user } = useAuth();
+  const { user, isDemoMode } = useAuth(); // Получаем isDemoMode из контекста аутентификации
   const { chatId: initialChatId, assistantId, assistantName } = route.params || {};
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -32,6 +32,14 @@ const ChatScreen = () => {
   const [currentChatId, setCurrentChatId] = useState(initialChatId);
   const flatListRef = useRef(null);
   const [isAiTyping, setIsAiTyping] = useState(false);
+
+  /**
+   * Надёжнее определяем демо-режим:
+   * 1. Явный флаг isDemoMode из контекста
+   * 2. Отсутствие пользователя (null) – значит, сессии нет
+   * 3. Специальный mock-id, который ставится в AuthProvider для демо
+   */
+  const isDemo = isDemoMode || !user || user?.id === 'demo-user';
 
   // Set up navigation header with assistant name
   useEffect(() => {
@@ -44,6 +52,20 @@ const ChatScreen = () => {
   // Fetch messages or create a new chat
   useEffect(() => {
     const fetchOrCreateChat = async () => {
+      if (isDemo) {
+        // В демо-режиме используем моковые данные сразу
+        const initialMessage = {
+          id: `initial-${Date.now()}`,
+          content: `Hello! I'm your ${assistantName || 'AI Assistant'}. How can I help you today?`,
+          sender_type: 'ai',
+          created_at: new Date().toISOString(),
+        };
+        setMessages([initialMessage]);
+        setCurrentChatId(`demo-chat-${Date.now()}`); // Присваиваем моковый ID чата для демо
+        setInitialLoading(false);
+        return;
+      }
+
       if (!user) {
         setInitialLoading(false);
         return;
@@ -102,16 +124,16 @@ const ChatScreen = () => {
     };
 
     fetchOrCreateChat();
-  }, [initialChatId, assistantId, user]);
+  }, [initialChatId, assistantId, user, isDemoMode]);
 
-  // Set up real-time subscription for new messages
+  // Set up real-time subscription for new messages (only if not in demo mode)
   useEffect(() => {
-    if (!currentChatId) return;
+    if (!currentChatId || isDemo) return;
 
     const channel = supabase
       .channel(`chat:${currentChatId}`)
       .on('postgres_changes', {
-        event: 'INSERT',
+        event: '*', // Change event to '*' to catch all changes
         schema: 'public',
         table: 'messages',
         filter: `chat_id=eq.${currentChatId}`,
@@ -129,7 +151,7 @@ const ChatScreen = () => {
     return () => {
       channel.unsubscribe();
     };
-  }, [currentChatId]);
+  }, [currentChatId, isDemo]); // Updated dependencies to include isDemo
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
@@ -141,7 +163,7 @@ const ChatScreen = () => {
   }, [messages]);
 
   const sendMessage = async () => {
-    if (!inputMessage.trim() || !currentChatId || !user) return;
+    if (!inputMessage.trim() || !currentChatId) return;
 
     const messageText = inputMessage.trim();
     setInputMessage('');
@@ -168,30 +190,85 @@ const ChatScreen = () => {
     setMessages(prev => [...prev, tempUserMessage, tempAiMessage]);
     setIsAiTyping(true);
 
-    try {
-      // Call the Supabase Edge Function to generate AI response
-      // The Edge Function will save both user and AI messages to DB
-      await sendMessageToAI(currentChatId, messageText, assistantId);
+    if (isDemo) {
+      // Имитация ответа AI для демо-режима
+      setTimeout(() => {
+        let aiResponseText = '';
+        const lowerCaseMessage = messageText.toLowerCase();
 
-      // Remove the temporary AI typing indicator once the real message comes via Realtime
-      setMessages(prev => prev.filter(msg => !msg.is_loading));
+        if (lowerCaseMessage.includes('hello') || lowerCaseMessage.includes('hi')) {
+          aiResponseText = `Hello! I'm your ${assistantName || 'AI Assistant'}. How can I help you today in demo mode?`;
+        } else if (lowerCaseMessage.includes('help')) {
+          aiResponseText = 'In demo mode, I can provide general assistance. What specific help do you need?';
+        } else if (lowerCaseMessage.includes('thank')) {
+          aiResponseText = 'You\'re welcome! This is a demo response. Feel free to ask more questions.';
+        } else if (lowerCaseMessage.includes('business')) {
+          aiResponseText = 'As a Business Strategist (in demo mode), I can tell you that market analysis is crucial for growth.';
+        } else if (lowerCaseMessage.includes('code')) {
+          aiResponseText = 'In this demo, I can confirm that clean code practices are essential for maintainability.';
+        } else {
+          aiResponseText = `This is a demo response from your ${assistantName || 'AI Assistant'}. To get real AI responses, please connect to Supabase and OpenAI.`;
+        }
 
-    } catch (error) {
-      console.error('Error sending message:', error);
-      // Update the temporary AI message with an error
-      setMessages(prev =>
-        prev.map(msg =>
-          msg.id === tempAiMessage.id
-            ? {
-                ...msg,
-                content: 'Sorry, I encountered an error processing your request. Please try again.',
-                is_loading: false
-              }
-            : msg
-        )
-      );
-    } finally {
-      setIsAiTyping(false);
+        setMessages(prev => 
+          prev.map(msg => 
+            msg.id === tempAiMessage.id 
+              ? { ...msg, content: aiResponseText, is_loading: false } 
+              : msg
+          )
+        );
+        setIsAiTyping(false);
+      }, 1500); // Имитация задержки 1.5 секунды
+    } else {
+      // Реальный ответ AI через Supabase Edge Function
+      if (!user) {
+        console.error('User not authenticated for real AI response.');
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === tempAiMessage.id
+              ? {
+                  ...msg,
+                  content: 'Sorry, you need to be logged in for real AI responses.',
+                  is_loading: false
+                }
+              : msg
+          )
+        );
+        setIsAiTyping(false);
+        return;
+      }
+
+      try {
+        // Call the Supabase Edge Function to generate AI response
+        // The Edge Function will save both user and AI messages to DB
+        const { aiResponse, messageId } = await sendMessageToAI(currentChatId, messageText, assistantId);
+
+        // Update the temporary AI message with the real response and ID
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === tempAiMessage.id
+              ? { ...msg, content: aiResponse, id: messageId, is_loading: false }
+              : msg
+          )
+        );
+
+      } catch (error) {
+        console.error('Error sending message:', error);
+        // Update the temporary AI message with an error
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === tempAiMessage.id
+              ? {
+                  ...msg,
+                  content: 'Sorry, I encountered an error processing your request. Please try again.',
+                  is_loading: false
+                }
+              : msg
+          )
+        );
+      } finally {
+        setIsAiTyping(false);
+      }
     }
   };
 

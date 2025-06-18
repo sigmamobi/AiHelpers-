@@ -1,99 +1,120 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import {
   StyleSheet,
   Text,
   View,
-  TouchableOpacity,
   ScrollView,
   TextInput,
+  Button,
   Switch,
   ActivityIndicator,
+  TouchableOpacity,
+  Platform,
 } from 'react-native';
+import { Picker } from '@react-native-picker/picker'; // Using this community package for a better Picker
 import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 // Import Supabase client and auth hook
 import { supabase, getUserSettings, updateUserSettings } from '../lib/supabase';
-import { useAuth } from '../App';
+import { useAuth } from '../App'; // Assuming App.js exports AuthContext
+import { useLocalization } from '../App'; // Assuming App.js exports LocalizationContext
 
 // App version
 const APP_VERSION = '0.1.0';
 
-// Mock user settings (will be replaced with actual settings from Supabase)
-const mockUserSettings = {
+// Default user settings
+const defaultUserSettings = {
   temperature: 0.7,
   max_tokens: 1000,
-  model_name: 'gpt-4',
+  model_name: 'gpt-3.5-turbo', // Default model
   language: 'en',
 };
 
+// Available AI Models based on user request
+const AVAILABLE_MODELS = [
+  { label: "GPT-3.5 Turbo", value: "gpt-3.5-turbo" },
+  { label: "GPT-4o", value: "gpt-4o" },
+  { label: "GPT-4o Mini", value: "gpt-4o-mini" },
+  { label: "GPT-4.1", value: "gpt-4.1" },
+  { label: "GPT-4.1 Mini", value: "gpt-4.1-mini" },
+];
+
 const SettingsScreen = () => {
-  const { user, signOut } = useAuth();
+  const { user, signOut: performSignOut } = useAuth();
+  const { t, locale, setLocale } = useLocalization();
+
   const [userData, setUserData] = useState({
     username: '',
     email: '',
-    avatar_url: null,
   });
-  const [temperature, setTemperature] = useState(mockUserSettings.temperature);
-  const [maxTokens, setMaxTokens] = useState(mockUserSettings.max_tokens.toString());
-  const [modelName, setModelName] = useState(mockUserSettings.model_name);
-  const [language, setLanguage] = useState(mockUserSettings.language);
-  const [isLoading, setIsLoading] = useState(false);
+  const [temperature, setTemperature] = useState(defaultUserSettings.temperature);
+  const [maxTokens, setMaxTokens] = useState(defaultUserSettings.max_tokens.toString());
+  const [modelName, setModelName] = useState(defaultUserSettings.model_name);
+  // Language state is now managed by LocalizationContext's `locale` and `setLocale`
+  // const [language, setLanguage] = useState(defaultUserSettings.language); 
+  
+  const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false); // Local state for dark mode toggle
+  const [isScreenLoading, setIsScreenLoading] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(false); // Simple state for dark mode switch UI
 
-  // Fetch user data and settings from Supabase
   useEffect(() => {
     const fetchUserDataAndSettings = async () => {
       if (!user) {
+        setIsScreenLoading(false);
         return;
       }
 
+      setIsScreenLoading(true);
       try {
-        setIsLoading(true);
-        // Fetch user profile
         const { data: profileData, error: profileError } = await supabase
           .from('users')
-          .select('*')
+          .select('username, email')
           .eq('id', user.id)
           .single();
 
-        if (profileError && profileError.code !== 'PGRST116') throw profileError; // PGRST116 means no rows found
-
-        if (profileData) {
-          setUserData({
-            username: profileData.username || user.email.split('@')[0],
-            email: profileData.email || user.email,
-            avatar_url: profileData.avatar_url,
-          });
-        } else {
-          // Fallback to user email if no profile found
-          setUserData({
-            username: user.email.split('@')[0],
-            email: user.email,
-            avatar_url: null,
-          });
+        if (profileError && profileError.code !== 'PGRST116') {
+          console.error('Error fetching user profile:', profileError);
         }
+        
+        setUserData({
+          username: profileData?.username || user.email?.split('@')[0] || 'User',
+          email: profileData?.email || user.email || '',
+        });
 
-        // Fetch user settings
         const settingsData = await getUserSettings(user.id);
         if (settingsData) {
-          setTemperature(settingsData.temperature);
-          setMaxTokens(settingsData.max_tokens.toString());
-          setModelName(settingsData.model_name);
-          setLanguage(settingsData.language);
+          setTemperature(settingsData.temperature ?? defaultUserSettings.temperature);
+          setMaxTokens((settingsData.max_tokens ?? defaultUserSettings.max_tokens).toString());
+          setModelName(settingsData.model_name ?? defaultUserSettings.model_name);
+          // Set initial app locale from saved settings if available
+          if (settingsData.language && settingsData.language !== locale) {
+            setLocale(settingsData.language);
+          }
+        } else {
+          setTemperature(defaultUserSettings.temperature);
+          setMaxTokens(defaultUserSettings.max_tokens.toString());
+          setModelName(defaultUserSettings.model_name);
+          // Set app locale to device default or 'en' if not in settings
+          // This is handled by i18n.js initialization, but we can sync it here too
+          if (locale !== defaultUserSettings.language) {
+             // setLocale(defaultUserSettings.language); // Or let i18n.js handle initial
+          }
         }
       } catch (error) {
         console.error('Error fetching user data or settings:', error);
-        // Fallback to mock data if Supabase fails
         setUserData({
           username: user.email ? user.email.split('@')[0] : 'User',
           email: user.email || 'user@example.com',
-          avatar_url: null,
         });
+        // Fallback to defaults
+        setTemperature(defaultUserSettings.temperature);
+        setMaxTokens(defaultUserSettings.max_tokens.toString());
+        setModelName(defaultUserSettings.model_name);
       } finally {
-        setIsLoading(false);
+        setIsScreenLoading(false);
       }
     };
 
@@ -103,266 +124,145 @@ const SettingsScreen = () => {
   const handleSaveSettings = async () => {
     if (!user) return;
 
-    setIsLoading(true);
+    setIsSaving(true);
+    setSaveSuccess(false);
     try {
       await updateUserSettings(user.id, {
-        temperature: parseFloat(temperature),
-        max_tokens: parseInt(maxTokens, 10),
+        temperature: parseFloat(temperature.toFixed(1)),
+        max_tokens: parseInt(maxTokens, 10) || defaultUserSettings.max_tokens,
         model_name: modelName,
-        language: language,
+        language: locale, // Save the current app locale
       });
-
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (error) {
       console.error('Error saving settings:', error);
+      alert(t('errorOccurred') + ': ' + error.message);
     } finally {
-      setIsLoading(false);
+      setIsSaving(false);
     }
   };
 
   const handleLogout = async () => {
     try {
-      await signOut();
+      await performSignOut();
     } catch (error) {
       console.error('Error signing out:', error);
+      alert(t('errorOccurred') + ': ' + error.message);
     }
   };
 
-  if (isLoading && !userData.email) {
+  if (isScreenLoading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Loading settings...</Text>
+        <Text style={styles.loadingText}>{t('loadingSettings')}</Text>
       </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['right', 'left']}>
+    <SafeAreaView style={styles.safeArea}>
       <StatusBar style="auto" />
-      <ScrollView
-        contentContainerStyle={styles.scrollViewContent}
-      >
+      <ScrollView contentContainerStyle={styles.container}>
         {/* User Profile Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>User Profile</Text>
+          <Text style={styles.sectionTitle}>{t('userProfile')}</Text>
           <View style={styles.profileInfo}>
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{userData.username.charAt(0)}</Text>
+              <Text style={styles.avatarText}>{userData.username?.charAt(0).toUpperCase() || 'U'}</Text>
             </View>
             <View>
               <Text style={styles.profileName}>{userData.username}</Text>
               <Text style={styles.profileEmail}>{userData.email}</Text>
             </View>
           </View>
-          <TouchableOpacity
-            style={styles.logoutButton}
-            onPress={handleLogout}
-          >
-            <Ionicons name="log-out-outline" size={20} color="#FF3B30" style={styles.logoutIcon} />
-            <Text style={styles.logoutButtonText}>Sign Out</Text>
-          </TouchableOpacity>
+          <Button title={t('signOut')} onPress={handleLogout} color="#FF3B30" />
         </View>
 
         {/* AI Model Settings */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>AI Model Settings</Text>
-          <View style={styles.settingRow}>
-            <Text style={styles.settingLabel}>Temperature</Text>
-            <View style={styles.settingValueContainer}>
-              <Text style={styles.settingValue}>{temperature.toFixed(1)}</Text>
-              <View style={styles.sliderContainer}>
-                <TouchableOpacity 
-                  onPress={() => setTemperature(Math.max(0, temperature - 0.1))}
-                  style={styles.sliderButton}
-                >
-                  <Ionicons name="remove" size={16} color="#007AFF" />
-                </TouchableOpacity>
-                <View style={styles.slider}>
-                  <View 
-                    style={[
-                      styles.sliderFill, 
-                      { width: `${(temperature / 2) * 100}%` }
-                    ]} 
-                  />
-                </View>
-                <TouchableOpacity 
-                  onPress={() => setTemperature(Math.min(2, temperature + 0.1))}
-                  style={styles.sliderButton}
-                >
-                  <Ionicons name="add" size={16} color="#007AFF" />
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-          <Text style={styles.settingDescription}>
-            Lower values make responses more focused and deterministic
-          </Text>
+          <Text style={styles.sectionTitle}>{t('aiModelSettings')}</Text>
           
-          <View style={styles.settingDivider} />
-          
-          <View style={styles.settingRow}>
-            <Text style={styles.settingLabel}>Max Tokens</Text>
-            <TextInput
-              style={styles.settingInput}
-              value={maxTokens}
-              onChangeText={setMaxTokens}
-              keyboardType="numeric"
-            />
-          </View>
-          <Text style={styles.settingDescription}>
-            Maximum length of AI responses
-          </Text>
-          
-          <View style={styles.settingDivider} />
-          
-          <View style={styles.settingRow}>
-            <Text style={styles.settingLabel}>AI Model</Text>
-            <View style={styles.modelSelector}>
-              <TouchableOpacity 
-                style={[
-                  styles.modelOption,
-                  modelName === 'gpt-4' && styles.modelOptionSelected
-                ]}
-                onPress={() => setModelName('gpt-4')}
-              >
-                <Text 
-                  style={[
-                    styles.modelOptionText,
-                    modelName === 'gpt-4' && styles.modelOptionTextSelected
-                  ]}
-                >
-                  GPT-4
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[
-                  styles.modelOption,
-                  modelName === 'gpt-3.5-turbo' && styles.modelOptionSelected
-                ]}
-                onPress={() => setModelName('gpt-3.5-turbo')}
-              >
-                <Text 
-                  style={[
-                    styles.modelOptionText,
-                    modelName === 'gpt-3.5-turbo' && styles.modelOptionTextSelected
-                  ]}
-                >
-                  GPT-3.5
-                </Text>
-              </TouchableOpacity>
-            </View>
+          <Text style={styles.settingLabel}>{t('temperature')}: {temperature.toFixed(1)}</Text>
+          <Text style={styles.settingDescription}>{t('temperatureDesc')}</Text>
+          {/* Basic Temperature Control - Consider a Slider for better UX if possible */}
+          <View style={styles.inputRow}>
+            <Button title="-0.1" onPress={() => setTemperature(prev => Math.max(0, parseFloat((prev - 0.1).toFixed(1))))} />
+            <Text style={styles.tempValueDisplay}>{temperature.toFixed(1)}</Text>
+            <Button title="+0.1" onPress={() => setTemperature(prev => Math.min(2, parseFloat((prev + 0.1).toFixed(1))))} />
           </View>
           
-          <TouchableOpacity
-            style={[
-              styles.saveButton,
-              saveSuccess && styles.saveButtonSuccess
-            ]}
-            onPress={handleSaveSettings}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.saveButtonText}>
-                {saveSuccess ? 'Settings Saved!' : 'Save Settings'}
-              </Text>
-            )}
-          </TouchableOpacity>
+          <Text style={styles.settingLabel}>{t('maxTokens')}</Text>
+          <Text style={styles.settingDescription}>{t('maxTokensDesc')}</Text>
+          <TextInput
+            style={styles.input}
+            value={maxTokens}
+            onChangeText={setMaxTokens}
+            keyboardType="numeric"
+            placeholder="e.g., 1000"
+          />
+          
+          <Text style={styles.settingLabel}>{t('aiModel')}</Text>
+          <Text style={styles.settingDescription}>{t('aiModelDesc')}</Text>
+          <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={modelName}
+              onValueChange={(itemValue) => setModelName(itemValue)}
+              style={styles.picker}
+            >
+              {AVAILABLE_MODELS.map(model => (
+                <Picker.Item key={model.value} label={model.label} value={model.value} />
+              ))}
+            </Picker>
+          </View>
+          
+          <Button 
+            title={isSaving ? t('loading') : (saveSuccess ? t('settingsSaved') : t('saveSettings'))} 
+            onPress={handleSaveSettings} 
+            disabled={isSaving}
+            color={saveSuccess ? '#4CAF50' : '#007AFF'}
+          />
         </View>
 
         {/* App Settings */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>App Settings</Text>
+          <Text style={styles.sectionTitle}>{t('appSettings')}</Text>
           <View style={styles.settingRow}>
-            <View style={styles.settingLabelContainer}>
-              <Ionicons 
-                name={isDarkMode ? "moon" : "sunny"} 
-                size={20} 
-                color="#666666" 
-                style={styles.settingIcon}
-              />
-              <Text style={styles.settingLabel}>Dark Mode</Text>
-            </View>
+            <Text style={styles.settingLabel}>{t('darkMode')}</Text>
             <Switch
               value={isDarkMode}
               onValueChange={setIsDarkMode}
-              trackColor={{ false: '#767577', true: '#81b0ff' }}
-              thumbColor={isDarkMode ? '#007AFF' : '#f4f3f4'}
+              // trackColor={{ false: '#767577', true: '#81b0ff' }}
+              // thumbColor={isDarkMode ? '#007AFF' : '#f4f3f4'}
             />
           </View>
           
-          <View style={styles.settingDivider} />
-          
-          <View style={styles.settingRow}>
-            <View style={styles.settingLabelContainer}>
-              <Ionicons 
-                name="language" 
-                size={20} 
-                color="#666666" 
-                style={styles.settingIcon}
-              />
-              <Text style={styles.settingLabel}>Language</Text>
-            </View>
-            <View style={styles.languageSelector}>
-              <TouchableOpacity 
-                style={[
-                  styles.languageOption,
-                  language === 'en' && styles.languageOptionSelected
-                ]}
-                onPress={() => setLanguage('en')}
-              >
-                <Text 
-                  style={[
-                    styles.languageOptionText,
-                    language === 'en' && styles.languageOptionTextSelected
-                  ]}
-                >
-                  English
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[
-                  styles.languageOption,
-                  language === 'ru' && styles.languageOptionSelected
-                ]}
-                onPress={() => setLanguage('ru')}
-              >
-                <Text 
-                  style={[
-                    styles.languageOptionText,
-                    language === 'ru' && styles.languageOptionTextSelected
-                  ]}
-                >
-                  Русский
-                </Text>
-              </TouchableOpacity>
-            </View>
+          <Text style={styles.settingLabel}>{t('language')}</Text>
+           <View style={styles.pickerContainer}>
+            <Picker
+              selectedValue={locale}
+              onValueChange={(itemValue) => setLocale(itemValue)}
+              style={styles.picker}
+            >
+              <Picker.Item label={t('english')} value="en" />
+              <Picker.Item label={t('russian')} value="ru" />
+            </Picker>
           </View>
         </View>
 
         {/* About Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>About</Text>
+          <Text style={styles.sectionTitle}>{t('about')}</Text>
           <View style={styles.settingRow}>
-            <Text style={styles.settingLabel}>Version</Text>
+            <Text style={styles.settingLabel}>{t('version')}</Text>
             <Text style={styles.settingValue}>{APP_VERSION}</Text>
           </View>
-          
-          <View style={styles.settingDivider} />
-          
-          <TouchableOpacity style={styles.settingRow}>
-            <Text style={styles.settingLabel}>Terms of Service</Text>
-            <Ionicons name="chevron-forward" size={20} color="#999999" />
+          <TouchableOpacity onPress={() => alert('Terms of Service: To be implemented')}>
+            <Text style={[styles.settingLabel, styles.linkText]}>{t('termsOfService')}</Text>
           </TouchableOpacity>
-          
-          <View style={styles.settingDivider} />
-          
-          <TouchableOpacity style={styles.settingRow}>
-            <Text style={styles.settingLabel}>Privacy Policy</Text>
-            <Ionicons name="chevron-forward" size={20} color="#999999" />
+          <TouchableOpacity onPress={() => alert('Privacy Policy: To be implemented')}>
+            <Text style={[styles.settingLabel, styles.linkText]}>{t('privacyPolicy')}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -371,35 +271,34 @@ const SettingsScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
     backgroundColor: '#F2F2F7',
   },
-  scrollViewContent: {
+  container: {
     padding: 16,
-    paddingBottom: 40,
   },
   section: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 2,
-    elevation: 2,
+    elevation: 3,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
     marginBottom: 16,
-    color: '#333333',
+    color: '#333',
   },
   profileInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   avatar: {
     width: 60,
@@ -418,160 +317,56 @@ const styles = StyleSheet.create({
   profileName: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#333333',
+    color: '#333',
   },
   profileEmail: {
     fontSize: 14,
-    color: '#666666',
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFEBEE',
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    alignSelf: 'flex-start',
-  },
-  logoutIcon: {
-    marginRight: 8,
-  },
-  logoutButtonText: {
-    color: '#FF3B30',
-    fontWeight: 'bold',
+    color: '#666',
   },
   settingRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 8,
   },
   settingLabel: {
     fontSize: 16,
-    color: '#333333',
-  },
-  settingLabelContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  settingIcon: {
-    marginRight: 8,
-  },
-  settingValue: {
-    fontSize: 16,
-    color: '#666666',
-  },
-  settingValueContainer: {
-    alignItems: 'flex-end',
+    color: '#333',
+    marginBottom: 4,
   },
   settingDescription: {
     fontSize: 12,
-    color: '#999999',
-    marginTop: -5,
-    marginBottom: 5,
+    color: '#666',
+    marginBottom: 8,
   },
-  settingDivider: {
-    height: 1,
-    backgroundColor: '#E5E5EA',
-    marginVertical: 5,
-  },
-  settingInput: {
+  settingValue: {
     fontSize: 16,
-    color: '#333333',
+    color: '#666',
+  },
+  input: {
+    height: 40,
+    borderColor: '#DDD',
     borderWidth: 1,
-    borderColor: '#E5E5EA',
     borderRadius: 8,
-    paddingVertical: 5,
     paddingHorizontal: 10,
-    minWidth: 80,
-    textAlign: 'right',
-  },
-  sliderContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    width: 150,
-  },
-  sliderButton: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#F2F2F7',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  slider: {
-    flex: 1,
-    height: 4,
-    backgroundColor: '#E5E5EA',
-    borderRadius: 2,
-    marginHorizontal: 8,
-  },
-  sliderFill: {
-    height: 4,
-    backgroundColor: '#007AFF',
-    borderRadius: 2,
-  },
-  modelSelector: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  modelOption: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: '#F2F2F7',
-  },
-  modelOptionSelected: {
-    backgroundColor: '#007AFF',
-  },
-  modelOptionText: {
-    fontSize: 14,
-    color: '#666666',
-  },
-  modelOptionTextSelected: {
-    color: '#FFFFFF',
-    fontWeight: 'bold',
-  },
-  languageSelector: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  languageOption: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: '#F2F2F7',
-  },
-  languageOptionSelected: {
-    backgroundColor: '#007AFF',
-  },
-  languageOptionText: {
-    fontSize: 14,
-    color: '#666666',
-  },
-  languageOptionTextSelected: {
-    color: '#FFFFFF',
-    fontWeight: 'bold',
-  },
-  saveButton: {
-    backgroundColor: '#007AFF',
-    borderRadius: 8,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginTop: 20,
-  },
-  saveButtonSuccess: {
-    backgroundColor: '#4CAF50', // Green color for success
-  },
-  saveButtonText: {
-    color: '#FFFFFF',
+    marginBottom: 12,
     fontSize: 16,
-    fontWeight: 'bold',
+    backgroundColor: '#F9F9F9',
+  },
+  pickerContainer: {
+    borderColor: '#DDD',
+    borderWidth: 1,
+    borderRadius: 8,
+    marginBottom: 12,
+    backgroundColor: '#F9F9F9',
+  },
+  picker: {
+    height: Platform.OS === 'ios' ? undefined : 50, // iOS Picker height is intrinsic
+    width: '100%',
+  },
+  linkText: {
+    color: '#007AFF',
+    paddingVertical: 8,
   },
   loadingContainer: {
     flex: 1,
@@ -580,10 +375,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#F2F2F7',
   },
   loadingText: {
-    marginTop: 16,
+    marginTop: 10,
     fontSize: 16,
-    color: '#666666',
+    color: '#666',
   },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  tempValueDisplay: {
+    fontSize: 16,
+    marginHorizontal: 10,
+    minWidth: 40,
+    textAlign: 'center',
+  }
 });
 
 export default SettingsScreen;

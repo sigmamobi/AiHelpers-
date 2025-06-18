@@ -1,187 +1,170 @@
-# Supabase Setup Guide ― AI Assistant App
-
-This guide walks you through configuring a brand-new Supabase backend for the **AI Assistant** project.  
-By the end you will have:
-
-1. A Supabase project with all tables, RLS policies and triggers installed  
-2. Seed data for the 30 predefined AI assistants  
-3. A deployed Edge Function `generate_ai_response` that safely calls the OpenAI API  
-4. Local `.env` / `app.json` populated so the React Native / Web app connects successfully  
-
-> **Estimated time:** 25 – 40 minutes
+# Supabase Setup Guide  
+_Bring your AI-Assistant backend online in ~30 minutes_
 
 ---
 
 ## 0. Prerequisites
 
-| Tool | Purpose | Install command |
-|------|---------|-----------------|
-| Supabase account | Cloud backend | <https://supabase.com> |
-| Supabase CLI ≥ 1.158 | Migrations & Edge Functions | `brew install supabase/tap/supabase` <br/>or see CLI docs |
-| Node .js ≥ 16 | Needed by CLI | `nvm install --lts` |
-| Deno (bundled in CLI) | Runs Edge Functions | comes with CLI |
-| OpenAI API key | Edge Function secrets | <https://platform.openai.com/account/api-keys> |
-| Git repo cloned | Contains `/supabase` folder with `schema.sql`, `seed/assistants.sql`, `functions/generate_ai_response` | `git clone …` |
+| Tool / Account | Why it’s needed | Install / link |
+|----------------|-----------------|----------------|
+| Supabase account | Cloud Postgres, Auth, Edge Fns | https://supabase.com |
+| Supabase CLI ≥ v2 | apply schema / seed, deploy functions | `brew install supabase/tap/supabase` |
+| Node ≥ 16 | CLI runtime | https://nodejs.org |
+| PostgreSQL (mobile dev optional) | local dev with `supabase start` | installed with CLI |
+| OpenAI API key | AI responses | https://platform.openai.com/account/api-keys |
+| Repo cloned | contains `/supabase` folder | `git clone …` |
 
 ---
 
-## 1. Create the Supabase Project
+## 1. Create a Supabase project
 
-1. Log in to the Supabase dashboard → **New Project**  
-2. Fill in:   
-   • **Project Name** `ai-assistant`  
-   • **DB Password** – strong & kept safe  
-   • **Region** – nearest to major users  
-3. Click **Create new project** – provisioning takes ≈ 1–2 min  
-4. After it’s “Initializing… done”, open **Project Settings → API** and copy:
+1. Sign in at `app.supabase.com` → **New project**.  
+2. Fill in:
+   - **Project name:** `ai-assistant`
+   - **DB password:** strong & saved
+   - **Region:** closest to users  
+3. Wait 1–2 min while it provisions.  
+4. Open **Project Settings → API** and copy:
 
-   | Name | Value | Keep where? |
-   |------|-------|-------------|
-   | `SUPABASE_URL` | `https://<project-ref>.supabase.co` | `.env` + `app.json` |
-   | `anon` public key | `SUPABASE_ANON_KEY` | `.env` + `app.json` |
-   | `service_role` key | **DO NOT** expose to client – used only in Edge Functions | `.env`, Function secrets |
+   | Var | Value | Where we’ll use it |
+   |-----|-------|--------------------|
+   | Project URL | `https://<ref>.supabase.co` | `.env`, `app.json` |
+   | `anon` public key | `SUPABASE_ANON_KEY` | `.env`, `app.json` |
+   | `service_role` key | **DO NOT** put in client code | CLI secrets, `.env` (as `SERVICE_ROLE_KEY`) |
 
 ---
 
-## 2. Bootstrap the Database
+## 2. Apply the database schema
 
-### 2.1 Link CLI
+### Option A – Supabase Dashboard
+
+1. Left sidebar → **SQL Editor → New query**  
+2. Open repo file `supabase/schema.sql`, copy all, paste, **Run**.  
+3. You should see “Success, no rows returned”.
+
+### Option B – Supabase CLI (recommended for teams / CI)
 
 ```bash
-cd clean-ai-app/ai-assistant        # project root
+cd ai-assistant      # repo root
+supabase login       # opens browser (or use --token)
+supabase link --project-ref <project-ref>
+supabase db push     # runs schema.sql
+```
+
+---
+
+## 3. Seed initial assistants
+
+### Dashboard
+
+1. SQL Editor → **New query**  
+2. Copy `supabase/seed/assistants.sql` → **Run**  
+3. Check **Table Editor → assistants** — should list ~30 rows.
+
+### CLI
+
+```bash
+supabase db seed --file supabase/seed/assistants.sql
+```
+
+---
+
+## 4. Configure CORS (Auth → Settings)
+
+For local web dev (Expo Web default port 8082):
+
+| Field | Value |
+|-------|-------|
+| **Site URL** | `http://localhost:8082` |
+| **Redirect URLs** | `http://localhost:8082` |
+
+Click **Save**.  
+Add production URLs later (e.g. `https://app.yoursite.com`).
+
+---
+
+## 5. Edge Function `generate_ai_response`
+
+### 5.1 Install & link CLI (if not done)
+
+```bash
+brew install supabase/tap/supabase   # already installed?
+supabase login --token '<access-token>'
 supabase link --project-ref <project-ref>
 ```
 
-### 2.2 Apply schema & RLS
+Generate an access-token in Dashboard → Account → Access Tokens if browser flow fails.
+
+### 5.2 Inject secrets
+
+> The CLI forbids names starting with `SUPABASE_`; we use `SERVICE_ROLE_KEY`.
 
 ```bash
-# execute the full schema (tables, indexes, triggers, policies)
-supabase db push supabase/schema.sql
+supabase secrets set OPENAI_API_KEY="sk-..." \
+                     SERVICE_ROLE_KEY="<service_role_key>"
 ```
 
-CLI returns `Finished  ✅` when all objects are created.
-
-### 2.3 Seed assistants
+### 5.3 Deploy
 
 ```bash
-supabase db push supabase/seed/assistants.sql
+# from repo root
+supabase functions deploy generate_ai_response
 ```
 
-Verify in Dashboard → **Table Editor → assistants** (30 rows).
+Success output ends with:
 
-> Need to reseed? Run `supabase db push supabase/seed/assistants.sql --force`.
+```
+Deployed Edge Function generate_ai_response at /functions/v1/generate_ai_response
+```
+
+### 5.4 Smoke test (optional)
+
+```bash
+supabase functions invoke generate_ai_response \
+  --body '{"chatId":"test","userMessage":"Hello","assistantId":"<uuid>"}'
+```
+
+Expect `200 OK` JSON with `"aiResponse"`.
 
 ---
 
-## 3. Deploy the Edge Function
+## 6. Environment variables
 
-### 3.1 Prepare environment variables
-
-```bash
-supabase functions secrets set \
-  OPENAI_API_KEY="<your-openai-key>" \
-  SUPABASE_SERVICE_ROLE_KEY="<service_role_key>"
-```
-
-> Only the service role key has permission to bypass RLS inside the function.
-
-### 3.2 Deploy
-
-```bash
-supabase functions deploy generate_ai_response --project-ref <project-ref>
-```
-
-Output should end with  
-`Deployed Edge Function generate_ai_response at /functions/v1/generate_ai_response`.
-
-### 3.3 Local test
-
-```bash
-curl -X POST \
-  -H "Authorization: Bearer <anon_or_service_key>" \
-  -H "Content-Type: application/json" \
-  -d '{"chatId":"test","userMessage":"Hello","assistantId":"<some-id>"}' \
-  https://<project-ref>.functions.supabase.co/generate_ai_response
-```
-
-Should return JSON with `aiResponse`.
-
----
-
-## 4. Configure the Front-End
-
-### 4.1 `.env`
+Create `.env` (never commit) in repo root:
 
 ```
 SUPABASE_URL=https://<project-ref>.supabase.co
-SUPABASE_ANON_KEY=<anon_key>
-SUPABASE_SERVICE_ROLE_KEY=<service_role_key>
-OPENAI_API_KEY=<openai_key>
+SUPABASE_ANON_KEY=<anon-public-key>
+SERVICE_ROLE_KEY=<service-role-key>      # used only by Edge Fns
+OPENAI_API_KEY=<your-openai-key>
+
+EXPO_PUBLIC_APP_ENV=development
+APP_URL=http://localhost:8082            # web URL for redirect
 ```
 
-> **Never** commit the file. `.gitignore` already excludes `.env`.
+Update `app.config.js` / `app.json` `extra` section to read these vars if not already.
 
-### 4.2 `app.json`
-
-```jsonc
-{
-  "expo": {
-    "extra": {
-      "supabaseUrl": "https://<project-ref>.supabase.co",
-      "supabaseAnonKey": "<anon_key>",
-      "appEnv": "development"
-    }
-  }
-}
-```
-
-### 4.3 Restart Expo
+After editing `.env`, restart Expo:
 
 ```bash
-npm run web -- --port 8085   # or expo start
-```
-
-Login / signup now works (Supabase Auth).  
-Chat messages persist and AI answers stream back in real-time.
-
----
-
-## 5. Optional Local Development with `supabase start`
-
-Want offline Postgres + Edge Functions?
-
-```bash
-supabase stop            # if running
-supabase start           # launches local containers
-supabase db reset        # applies schema & seed locally
-```
-
-Update `.env`:
-
-```
-SUPABASE_URL=http://localhost:54321
-SUPABASE_ANON_KEY=...
+# kill Metro if running
+npx expo start --web --port 8082
 ```
 
 ---
 
-## 6. Troubleshooting
+## 7. Common pitfalls
 
-| Symptom | Fix |
-|---------|-----|
-| **`403` Unauthorized** from Edge | Ensure correct header `Authorization: Bearer ANON_KEY` |
-| Edge function `Invalid JWT` | Function secrets not set / wrong key type |
-| RLS block insert/select | Confirm policies under **Auth → Policies**; use `service_role` in server contexts |
-| Schema push fails `function … already exists` | Use `--overwrite` flag or drop objects manually |
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `Failed to fetch` on login | CORS or wrong URL/key | Ensure step 4 done and `.env` matches Dashboard |
+| 401 / 403 from Edge Fn | Missing JWT or wrong secret | Call function via Supabase client; verify secrets |
+| `Env name cannot start with SUPABASE_` | Wrong secret name | Use `SERVICE_ROLE_KEY` instead |
+| OpenAI 429 / 401 | Quota or invalid key | Check dashboard / billing & secret value |
+| Realtime not firing | Row Level Security or channel name | Confirm RLS policies and `filter: chat_id=eq.<id>` |
 
 ---
 
-## 7. What’s Next?
-
-- Grant an **admin** role (Postgres) to manage assistants & feedback tables  
-- Enable Supabase Storage for user avatars / assistant icons  
-- Add rate-limits via **pg\_net** or **supabase/functions rate-limit**  
-- Set up **Realtime** channel filters for messages to stream directly into the chat UI  
-- Add automated backups & point-in-time-recovery in **Project Settings → Backups**
-
-Happy building! 🚀
+🎉 Your Supabase backend is live!  
+Next → run the Expo app, register a user, open a chat, and watch AI replies stream in real time.  
+Happy building!

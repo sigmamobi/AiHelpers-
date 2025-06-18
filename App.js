@@ -1,15 +1,20 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, TouchableOpacity, FlatList, TextInput, ScrollView, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, ActivityIndicator } from 'react-native'; // Removed unused imports
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-url-polyfill/auto';
+// Localization is initialized in lib/i18n.js, no need for direct import here unless for specific functions
+// import * as Localization from 'expo-localization'; 
 
 // Supabase client
-import { supabase, getCurrentUser, signOut } from './lib/supabase';
+import { supabase, signOut } from './lib/supabase'; // Removed unused getCurrentUser
+
+// i18n setup
+import i18n, { t, setLocale as i18nSetLocale } from './lib/i18n';
 
 // Screens
 import HomeScreen from './screens/HomeScreen';
@@ -23,9 +28,16 @@ const AuthContext = createContext({
   user: null,
   session: null,
   isLoading: true,
-  isDemoMode: false, // Add isDemoMode to context
-  signOut: () => {},
-  enterDemoMode: () => {}, // Add enterDemoMode to context
+  isDemoMode: false,
+  signOut: async () => {},
+  enterDemoMode: () => {},
+});
+
+// Create Localization Context
+const LocalizationContext = createContext({
+  locale: 'en', // Default to 'en'
+  setLocale: (locale) => {},
+  t: (scope, options) => `[${scope}]`, // Fallback t function
 });
 
 // Auth Provider Component
@@ -33,10 +45,9 @@ const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isDemoMode, setIsDemoMode] = useState(false); // State for demo mode
+  const [isDemoMode, setIsDemoMode] = useState(false);
 
   useEffect(() => {
-    // Check for existing session
     const checkSession = async () => {
       try {
         const { data } = await supabase.auth.getSession();
@@ -51,21 +62,18 @@ const AuthProvider = ({ children }) => {
 
     checkSession();
 
-    // Listen for auth state changes
     const { data: authListener } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
-        console.log('Auth state changed:', event);
+        console.log('Auth state changed:', event, newSession);
         setSession(newSession);
         setUser(newSession?.user || null);
         setIsLoading(false);
-        // Exit demo mode if a real session is established or user logs out
         if (newSession || event === 'SIGNED_OUT') {
           setIsDemoMode(false);
         }
       }
     );
 
-    // Cleanup subscription
     return () => {
       if (authListener && authListener.subscription) {
         authListener.subscription.unsubscribe();
@@ -86,9 +94,9 @@ const AuthProvider = ({ children }) => {
 
   const enterDemoMode = () => {
     setIsDemoMode(true);
-    setIsLoading(false); // No loading needed for demo mode
-    setUser({ id: 'demo-user', email: 'demo@example.com' }); // Mock user for demo
-    setSession({}); // Mock session for demo
+    setIsLoading(false);
+    setUser({ id: 'demo-user', email: 'demo@example.com' });
+    setSession({}); // Mock session
   };
 
   return (
@@ -107,8 +115,42 @@ const AuthProvider = ({ children }) => {
   );
 };
 
+// Localization Provider Component
+const LocalizationProvider = ({ children }) => {
+  const [locale, setLocaleState] = useState(i18n.locale || 'en');
+
+  const setAppLocale = (newLocale) => {
+    try {
+      i18nSetLocale(newLocale); // Update i18n instance
+      setLocaleState(newLocale); // Update React state
+    } catch (error) {
+      console.error("Error in setAppLocale:", error);
+    }
+  };
+  
+  const safeT = (scope, options) => {
+    try {
+      return t(scope, options);
+    } catch (error) {
+      console.error(`Error using t function for scope "${scope}":`, error);
+      return `[${scope}]`; // Fallback
+    }
+  };
+
+
+  return (
+    <LocalizationContext.Provider value={{ locale, setLocale: setAppLocale, t: safeT }}>
+      {children}
+    </LocalizationContext.Provider>
+  );
+};
+
+
 // Hook for using Auth Context
 export const useAuth = () => useContext(AuthContext);
+
+// Hook for using Localization Context
+export const useLocalization = () => useContext(LocalizationContext);
 
 // Navigation setup
 const Stack = createNativeStackNavigator();
@@ -116,17 +158,18 @@ const Tab = createBottomTabNavigator();
 
 // Main Tab Navigator
 function MainTabNavigator() {
+  const { t: safeT } = useLocalization(); 
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
 
-          if (route.name === 'Home') {
+          if (route.name === 'HomeNav') {
             iconName = focused ? 'home' : 'home-outline';
-          } else if (route.name === 'Assistants') {
+          } else if (route.name === 'AssistantsNav') {
             iconName = focused ? 'people' : 'people-outline';
-          } else if (route.name === 'Settings') {
+          } else if (route.name === 'SettingsNav') {
             iconName = focused ? 'settings' : 'settings-outline';
           }
 
@@ -136,75 +179,127 @@ function MainTabNavigator() {
         tabBarInactiveTintColor: 'gray',
       })}
     >
-      <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'AI Assistant' }} />
-      <Tab.Screen name="Assistants" component={AssistantsScreen} />
-      <Tab.Screen name="Settings" component={SettingsScreen} />
+      <Tab.Screen 
+        name="HomeNav" 
+        component={HomeScreen} 
+        options={{ title: safeT('appName') }} 
+      />
+      <Tab.Screen 
+        name="AssistantsNav" 
+        component={AssistantsScreen} 
+        options={{ title: safeT('assistants') }} 
+      />
+      <Tab.Screen 
+        name="SettingsNav" 
+        component={SettingsScreen} 
+        options={{ title: safeT('settings') }} 
+      />
     </Tab.Navigator>
   );
 }
 
 // Loading Component
-const LoadingScreen = () => (
-  <View style={styles.loadingContainer}>
-    <ActivityIndicator size="large" color="#007AFF" />
-    <Text style={styles.loadingText}>Loading...</Text>
-  </View>
-);
+const LoadingScreen = () => {
+  const { t: safeT } = useLocalization();
+  return (
+    <View style={styles.loadingContainer}>
+      <ActivityIndicator size="large" color="#007AFF" />
+      <Text style={styles.loadingText}>{safeT('loading')}</Text>
+    </View>
+  );
+};
 
 // Main App Component
 export default function App() {
-  return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <AppContent />
-      </AuthProvider>
-    </SafeAreaProvider>
-  );
+  try {
+    return (
+      <SafeAreaProvider>
+        <LocalizationProvider>
+          <AuthProvider>
+            <AppContent />
+          </AuthProvider>
+        </LocalizationProvider>
+      </SafeAreaProvider>
+    );
+  } catch (error) {
+    console.error("Critical error in App component:", error);
+    // Basic fallback UI
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white' }}>
+        <Text style={{ color: 'red', fontSize: 18, textAlign: 'center', padding: 20 }}>
+          An unexpected error occurred. Please restart the application.
+        </Text>
+      </View>
+    );
+  }
 }
 
 // App Content with Auth Check
 function AppContent() {
   const { user, isLoading, isDemoMode } = useAuth();
+  const { locale, t: safeT } = useLocalization(); 
 
-  // Show loading screen while checking auth state
   if (isLoading) {
     return <LoadingScreen />;
   }
 
-  return (
-    <NavigationContainer>
-      <StatusBar style="auto" />
-      {user || isDemoMode ? ( // Render main app if user is logged in or in demo mode
-        <Stack.Navigator>
-          <Stack.Screen 
-            name="Main" 
-            component={MainTabNavigator} 
-            options={{ headerShown: false }} 
-          />
-          <Stack.Screen 
-            name="Chat" 
-            component={ChatScreen} 
-            options={{ 
-              headerBackTitle: 'Back'
-            }} 
-          />
-        </Stack.Navigator>
-      ) : (
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="Auth" component={AuthScreen} />
-        </Stack.Navigator>
-      )}
-    </NavigationContainer>
-  );
+  try {
+    return (
+      <NavigationContainer key={locale}> 
+        <StatusBar style="auto" />
+        {user || isDemoMode ? (
+          <Stack.Navigator>
+            <Stack.Screen
+              name="Main"
+              component={MainTabNavigator}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="Chat"
+              component={ChatScreen}
+              options={{
+                headerBackTitle: safeT('back'), 
+              }}
+            />
+          </Stack.Navigator>
+        ) : (
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="Auth" component={AuthScreen} />
+          </Stack.Navigator>
+        )}
+      </NavigationContainer>
+    );
+  } catch (error) {
+    console.error("Error in AppContent navigation:", error);
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'white' }}>
+        <Text style={{ color: 'red', fontSize: 16, textAlign: 'center', padding: 20 }}>
+          Error loading application content. Please try again.
+        </Text>
+      </View>
+    );
+  }
 }
 
-// Add loading styles to existing styles
+// Styles (simplified for brevity, assuming full styles are defined as before)
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F2F2F7',
   },
-  welcomeSection: {
+  // ... (other styles from previous version of App.js)
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F2F2F7',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#666666',
+  },
+   welcomeSection: {
     padding: 16,
     paddingTop: 20,
   },
@@ -465,17 +560,5 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: '#CCCCCC',
-  },
-  // Loading styles
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F2F2F7',
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#666666',
   },
 });
