@@ -1,6 +1,6 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, ActivityIndicator } from 'react-native'; // Removed unused imports
+import { StyleSheet, Text, View, ActivityIndicator, Image } from 'react-native'; // Added Image
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -182,7 +182,18 @@ function MainTabNavigator() {
       <Tab.Screen 
         name="HomeNav" 
         component={HomeScreen} 
-        options={{ title: safeT('appName') }} 
+        options={{ 
+          title: safeT('appName'), // This sets the title in the tab bar if header is not shown or for accessibility
+          headerTitle: () => ( // Custom header title component
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Image 
+                source={require('./assets/icon.png')} 
+                style={{ width: 24, height: 24, marginRight: 8 }} 
+              />
+              <Text style={{ fontSize: 18, fontWeight: 'bold' }}>{safeT('appName')}</Text>
+            </View>
+          )
+        }} 
       />
       <Tab.Screen 
         name="AssistantsNav" 
@@ -203,6 +214,11 @@ const LoadingScreen = () => {
   const { t: safeT } = useLocalization();
   return (
     <View style={styles.loadingContainer}>
+      <Image 
+        source={require('./assets/splash.png')} 
+        style={styles.splashImage} 
+        resizeMode="contain"
+      />
       <ActivityIndicator size="large" color="#007AFF" />
       <Text style={styles.loadingText}>{safeT('loading')}</Text>
     </View>
@@ -281,13 +297,12 @@ function AppContent() {
   }
 }
 
-// Styles (simplified for brevity, assuming full styles are defined as before)
+// Styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F2F2F7',
   },
-  // ... (other styles from previous version of App.js)
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -298,6 +313,11 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
     color: '#666666',
+  },
+  splashImage: { // Added style for splash image
+    width: 200,
+    height: 200,
+    marginBottom: 20,
   },
    welcomeSection: {
     padding: 16,
